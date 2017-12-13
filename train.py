@@ -27,6 +27,7 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
 
     if cuda:
         model = model.cuda()
+        model.layers = [l.cuda() for l in model.layers]
 
     if not os.path.isdir(exp_path):
         os.makedirs(exp_path)
