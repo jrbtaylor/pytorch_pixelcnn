@@ -14,7 +14,7 @@ import train
 
 def run(batch_size,n_features,n_layers,n_scales,n_bins,
         exp_name='pixelCNN',exp_dir='/home/jason/experiments/pytorch_pixelcnn/',
-        optimizer='adam',learnrate=1e-3,dropout=0.5,cuda=True,resume=False):
+        optimizer='adam',learnrate=3e-3,dropout=0.7,cuda=True,resume=False):
 
     exp_name += '_%ifeat_%ilayers_%ibins'%(n_features,n_layers,n_bins)
     exp_dir = os.path.join(exp_dir,exp_name)
@@ -31,7 +31,7 @@ def run(batch_size,n_features,n_layers,n_scales,n_bins,
             json.dump(params,f)
 
         # Model
-        net = model.PixelCNN(1,n_features,n_layers,n_scales,n_bins)
+        net = model.PixelCNN(1,n_features,n_layers,n_scales,n_bins,dropout)
     else:
         # if resuming, need to have params, stats and checkpoint files
         if not (os.path.isfile(os.path.join(exp_dir,'params.json'))

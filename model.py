@@ -96,11 +96,14 @@ class PixelCNN(nn.Module):
                 else:
                     # dropout increases linearly through the net
                     p_drop = dropout/2*(s*n_layers+l+1)/n_scales/n_layers
-                    block = nn.Sequential(nn.Dropout2d(p_drop),
-                                          GatedRes(n_features,n_features))
+                    if l==0:  # start new scale with strided conv
+                        block = nn.Sequential(nn.Dropout2d(p_drop),
+                                              MaskedConv('B', n_features,
+                                                         n_features, 3, 2))
+                    else:
+                        block = nn.Sequential(nn.Dropout2d(p_drop),
+                                              GatedRes(n_features, n_features))
                 self.layers.append(block)
-            if s<n_scales-1:  # strided conv to reduce size
-                self.layers.append(MaskedConv('B',n_features,n_features,3,2))
 
         # Down pass
         for s in range(n_scales):
@@ -111,8 +114,9 @@ class PixelCNN(nn.Module):
                                       GatedRes(n_features,n_features,
                                                aux_channels=n_features))
                 self.layers.append(block)
-            if s<n_scales-1:  # strided conv transpose to increase size
-                self.layers.append(MaskedDeconv(n_features,n_features,3,2))
+                # finish scale with strided conv transpose
+                if l==n_layers-1 and s<n_scales-1:
+                    self.layers.append(MaskedDeconv(n_features,n_features,3,2))
 
         # Last layer: project to n_bins (output is [-1, n_bins, h, w])
         self.layers.append(
@@ -129,20 +133,15 @@ class PixelCNN(nn.Module):
                 i += 1
                 x = self.layers[i](x)
                 features.append(x)
-            if s<self.n_scales-1:
-                i += 1
-                x = self.layers[i](x)
-                features.append(x)
 
         # Down pass
-        x = features.pop()
         for s in range(self.n_scales):
             for l in range(self.n_layers):
                 i += 1
                 x = self.layers[i](torch.stack((x,features.pop())))
-            if s<self.n_scales-1:
-                i += 1
-                x = self.layers[i](x)
+                if l==self.n_layers-1 and s<self.n_scales-1:
+                    i += 1
+                    x = self.layers[i](x)
 
         # Last layer
         i += 1
