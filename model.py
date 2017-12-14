@@ -46,12 +46,12 @@ class GatedRes(nn.Module):
         if aux_channels!=2*out_channels and aux_channels!=0:
             self.aux_shortcut = nn.Sequential(
                 nn.Conv2d(aux_channels,2*out_channels,1),
-                nn.BatchNorm2d(2*out_channels,momentum=0.9))
+                nn.BatchNorm2d(2*out_channels,momentum=0.1))
         if in_channels!=out_channels:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels,out_channels,1),
-                nn.BatchNorm2d(out_channels,momentum=0.9))
-        self.batchnorm = nn.BatchNorm2d(out_channels,momentum=0.9)
+                nn.BatchNorm2d(out_channels,momentum=0.1))
+        self.batchnorm = nn.BatchNorm2d(out_channels,momentum=0.1)
 
     def forward(self,x):
         # check for aux input from first half of net stacked into x
@@ -85,30 +85,26 @@ class PixelCNN(nn.Module):
         self.n_scales = n_scales
 
         # Up pass
-        self.input_batchnorm = nn.BatchNorm2d(in_channels)
+        self.input_batchnorm = nn.BatchNorm2d(in_channels,momentum=0.1)
         for s in range(n_scales):
             for l in range(n_layers):
                 if s==0 and l==0:  # start with normal conv
-                    block = nn.Sequential(MaskedConv('A',in_channels,n_features,
-                                                     kernel_size=7),
-                                          nn.BatchNorm2d(n_features),
-                                          nn.ReLU())
+                    block = nn.Sequential(
+                        MaskedConv('A',in_channels,n_features,kernel_size=7),
+                        nn.BatchNorm2d(n_features,momentum=0.1),
+                        nn.ReLU())
                 else:
-                    # dropout increases linearly through the net
-                    p_drop = dropout/2*(s*n_layers+l+1)/n_scales/n_layers
                     if l==0:  # start new scale with strided conv
-                        block = nn.Sequential(nn.Dropout2d(p_drop),
-                                              MaskedConv('B', n_features,
+                        block = nn.Sequential(MaskedConv('B', n_features,
                                                          n_features, 3, 2))
                     else:
-                        block = nn.Sequential(nn.Dropout2d(p_drop),
-                                              GatedRes(n_features, n_features))
+                        block = nn.Sequential(GatedRes(n_features, n_features))
                 self.layers.append(block)
 
         # Down pass
         for s in range(n_scales):
             for l in range(n_layers):
-                # dropout increases linearly through the net
+                # dropout increases linearly through down pass
                 p_drop = dropout*(s*n_layers+l+1)/n_scales/n_layers
                 block = nn.Sequential(nn.Dropout2d(p_drop),
                                       GatedRes(n_features,n_features,
@@ -122,7 +118,7 @@ class PixelCNN(nn.Module):
         self.layers.append(
             nn.Sequential(nn.Dropout2d(dropout),
                           nn.Conv2d(n_features,n_bins,1),
-                          nn.LogSoftmax(dim=-1)))
+                          nn.LogSoftmax(dim=1)))
 
     def forward(self,x):
         # Up pass

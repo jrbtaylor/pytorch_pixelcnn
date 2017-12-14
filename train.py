@@ -2,6 +2,8 @@
 Written by Jason Taylor <jasonrbtaylor@gmail.com> 2017-2018
 """
 
+from PIL import Image
+
 import json
 import os
 import time
@@ -22,7 +24,7 @@ def _clearline():
 
 
 def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
-        optimizer='adam',learnrate=1e-3,cuda=True,patience=20,max_epochs=200,
+        optimizer='adam',learnrate=1e-4,cuda=True,patience=20,max_epochs=200,
         resume=False):
 
     if cuda:
@@ -39,7 +41,8 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
                  }[optimizer.lower()]
 
     if not resume:
-        stats = {'loss':{'train':[],'val':[]}}
+        stats = {'loss':{'train':[],'val':[]},
+                 'mean_output':{'train':[],'val':[]}}
         best_val = np.inf
         stall = 0
         start_epoch = 0
@@ -48,11 +51,16 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
             stats = json.load(js)
         best_val = np.min(stats['loss']['val'])
         stall = len(stats['loss']['val'])-np.argmin(stats['loss']['val'])-1
-        start_epoch = len(stats['loss']['val'])
+        start_epoch = len(stats['loss']['val'])-1
+        print('Resuming from epoch %i'%start_epoch)
+
+    def save_img(x,filename):
+        Image.fromarray((255*x).astype('uint8')).save(filename)
 
     def epoch(dataloader,training):
         bar = progressbar.ProgressBar()
         losses = []
+        mean_outs = []
         for x,_ in bar(dataloader):
             y = label_preprocess(x)
             if cuda:
@@ -60,31 +68,42 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
             x,y = Variable(x),Variable(y)
             if training:
                 optimizer.zero_grad()
+                model.train()
+            else:
+                model.eval()
             output = model(x)
             loss = loss_fcn(output,y)
+            # track mean output
+            output = output.data.cpu().numpy()
+            mean_outs.append(np.mean(np.argmax(output,axis=1))/output.shape[1])
             if training:
                 loss.backward()
                 optimizer.step()
             losses.append(loss.data.cpu().numpy())
+        save_img(np.concatenate(
+            (np.squeeze(x.data.cpu().numpy()[0]), np.argmax(output[0], axis=0)/output.shape[1]), axis=1),
+                 os.path.join(exp_path, 'real_and_generated.png'))
         _clearline()
-        return float(np.mean(losses))
+        return float(np.mean(losses)), np.mean(mean_outs)
 
     for e in range(start_epoch,max_epochs):
         # Training
         t0 = time.time()
-        loss = epoch(train_loader,training=True)
+        loss,mean_out = epoch(train_loader,training=True)
         time_per_example = (time.time()-t0)/len(train_loader.dataset)
         stats['loss']['train'].append(loss)
-        print(('Epoch %3i:    Training loss = %6.4f    %4.2f msec/example')
-              %(e,loss,time_per_example*1000))
+        stats['mean_output']['train'].append(mean_out)
+        print(('Epoch %3i:    Training loss = %6.4f    mean output = %1.2f    '
+               '%4.2f msec/example')%(e,loss,mean_out,time_per_example*1000))
 
         # Validation
         t0 = time.time()
-        loss = epoch(val_loader,training=False)
+        loss,mean_out = epoch(val_loader,training=False)
         time_per_example = (time.time()-t0)/len(val_loader.dataset)
         stats['loss']['val'].append(loss)
-        print(('            Validation loss = %6.4f    %4.2f msec/example')
-              %(loss,time_per_example*1000))
+        stats['mean_output']['val'].append(mean_out)
+        print(('            Validation loss = %6.4f    mean output = %1.2f    '
+               '%4.2f msec/example')%(loss,mean_out,time_per_example*1000))
 
         # Save results and update plots
         with open(statsfile,'w') as sf:
