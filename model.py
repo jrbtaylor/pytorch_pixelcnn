@@ -43,19 +43,11 @@ class GatedRes(nn.Module):
         self.conv = MaskedConv('B',in_channels,2*out_channels,kernel_size,
                                stride)
         self.out_channels = out_channels
-        if aux_channels==2*out_channels or aux_channels==0:
-            def shortcut(x):
-                return x
-            self.aux_shortcut = shortcut
-        else:
+        if aux_channels!=2*out_channels and aux_channels!=0:
             self.aux_shortcut = nn.Sequential(
                 nn.Conv2d(aux_channels,2*out_channels,1),
                 nn.BatchNorm2d(2*out_channels,momentum=0.9))
-        if in_channels==out_channels:
-            def shortcut(x):
-                return x
-            self.shortcut = shortcut
-        else:
+        if in_channels!=out_channels:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels,out_channels,1),
                 nn.BatchNorm2d(out_channels,momentum=0.9))
@@ -71,14 +63,15 @@ class GatedRes(nn.Module):
             aux = None
         x1 = self.conv(x)
         if aux is not None:
-            aux = self.aux_shortcut(aux)
+            if hasattr(self,'aux_shortcut'):
+                aux = self.aux_shortcut(aux)
             x1 = (x1+aux)/2
         # split for gate (note: pytorch dims are [n,c,h,w])
         xf,xg = torch.split(x1,self.out_channels,dim=1)
         xf = torch.tanh(xf)
         xg = torch.sigmoid(xg)
-        # shortcut function (may change channels)
-        x = self.shortcut(x)
+        if hasattr(self,'shortcut'):
+            x = self.shortcut(x)
         return x+self.batchnorm(xg*xf)
 
 
@@ -87,7 +80,7 @@ class PixelCNN(nn.Module):
                  dropout=0.5):
         super(PixelCNN,self).__init__()
 
-        self.layers = []
+        self.layers = nn.ModuleList()
         self.n_layers = n_layers
         self.n_scales = n_scales
 
