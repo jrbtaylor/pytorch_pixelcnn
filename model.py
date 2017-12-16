@@ -21,26 +21,11 @@ class MaskedConv(nn.Conv2d):
         return super(MaskedConv,self).forward(x)
 
 
-class MaskedDeconv(nn.ConvTranspose2d):
-    def __init__(self,in_channels,out_channels,kernel_size=3,stride=2):
-        super(MaskedDeconv,self).__init__(in_channels,out_channels,kernel_size,
-                                          stride,padding=kernel_size//2)
-        mask = torch.ones(1,1,kernel_size,kernel_size)
-        mask[:,:,kernel_size//2,kernel_size//2+1:] = 0
-        mask[:,:,kernel_size//2+1:] = 0
-        self.register_buffer('mask',mask)
-
-    def forward(self,x):
-        self.weight.data *= self.mask
-        return super(MaskedDeconv,self).forward(
-            x,output_size=[x.shape[2]*2,x.shape[3]*2])
-
-
 class GatedRes(nn.Module):
     def __init__(self,in_channels,out_channels,kernel_size=3,stride=1,
                  aux_channels=0):
         super(GatedRes,self).__init__()
-        self.conv = MaskedConv('B',in_channels,2*out_channels,kernel_size,
+        self.conv = MaskedConv('A',in_channels,2*out_channels,kernel_size,
                                stride)
         self.out_channels = out_channels
         if aux_channels!=2*out_channels and aux_channels!=0:
@@ -90,12 +75,12 @@ class PixelCNN(nn.Module):
             for l in range(n_layers):
                 if s==0 and l==0:  # start with normal conv
                     block = nn.Sequential(
-                        MaskedConv('A',in_channels,n_features,kernel_size=7),
+                        MaskedConv('A',in_channels+1,n_features,kernel_size=7),
                         nn.BatchNorm2d(n_features,momentum=0.1),
                         nn.ReLU())
                 else:
                     if l==0:  # start new scale with strided conv
-                        block = nn.Sequential(MaskedConv('B', n_features,
+                        block = nn.Sequential(MaskedConv('A', n_features,
                                                          n_features, 3, 2))
                     else:
                         block = nn.Sequential(GatedRes(n_features, n_features))
@@ -104,15 +89,16 @@ class PixelCNN(nn.Module):
         # Down pass
         for s in range(n_scales):
             for l in range(n_layers):
-                # dropout increases linearly through down pass
-                p_drop = dropout*(s*n_layers+l+1)/n_scales/n_layers
-                block = nn.Sequential(nn.Dropout2d(p_drop),
-                                      GatedRes(n_features,n_features,
-                                               aux_channels=n_features))
-                self.layers.append(block)
-                # finish scale with strided conv transpose
-                if l==n_layers-1 and s<n_scales-1:
-                    self.layers.append(MaskedDeconv(n_features,n_features,3,2))
+                # dropout rate increases linearly in second half of net
+                p_drop = dropout*(s*n_layers+l)/n_layers/n_scales
+                block = [nn.Dropout2d(p_drop),
+                         GatedRes(n_features, n_features,
+                                  aux_channels=n_features)]
+                # finish scale with upsampling
+                if l == n_layers-1 and s < n_scales-1:
+                    block.append(nn.Upsample(scale_factor=2, mode='nearest'))
+                self.layers.append(nn.Sequential(*block))
+
 
         # Last layer: project to n_bins (output is [-1, n_bins, h, w])
         self.layers.append(
@@ -121,6 +107,9 @@ class PixelCNN(nn.Module):
                           nn.LogSoftmax(dim=1)))
 
     def forward(self,x):
+        # Add channel of ones so network can tell where padding is
+        x = nn.functional.pad(x,(0,0,0,0,0,1,0,0),mode='constant',value=1)
+
         # Up pass
         features = []
         i = -1
@@ -135,9 +124,6 @@ class PixelCNN(nn.Module):
             for l in range(self.n_layers):
                 i += 1
                 x = self.layers[i](torch.stack((x,features.pop())))
-                if l==self.n_layers-1 and s<self.n_scales-1:
-                    i += 1
-                    x = self.layers[i](x)
 
         # Last layer
         i += 1
