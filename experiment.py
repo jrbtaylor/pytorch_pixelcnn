@@ -7,14 +7,15 @@ import json
 import os
 
 import torch
+import numpy as np
 
 import data
 import model
 import train
 
-def run(batch_size,n_features,n_layers,n_scales,n_bins,
+def run(batch_size=128,n_features=64,n_layers=6,n_scales=1,n_bins=16,
         exp_name='pixelCNN',exp_dir='/home/jason/experiments/pytorch_pixelcnn/',
-        optimizer='adam',learnrate=5e-4,dropout=0.5,cuda=True,resume=False):
+        optimizer='adam',learnrate=1e-4,dropout=0.5,cuda=True,resume=False):
 
     exp_name += '_%ifeat_%iscales_%ilayers_%ibins'%(
         n_features,n_scales,n_layers,n_bins)
@@ -44,10 +45,15 @@ def run(batch_size,n_features,n_layers,n_scales,n_bins,
     # Data loaders
     train_loader,val_loader = data.mnist(batch_size)
 
+    # Up-weight 1s (~8x rarer) to balance loss, interpolate intermediate values
+    weight = torch.from_numpy(np.linspace(1,8,n_bins,dtype='float32'))
+    if cuda:
+        weight = weight.cuda()
+
     # Define loss fcn, incl. label formatting from input
     def input2label(x):
         return torch.squeeze(torch.round((n_bins-1)*x).type(torch.LongTensor),1)
-    loss_fcn = torch.nn.NLLLoss2d()
+    loss_fcn = torch.nn.NLLLoss2d(torch.autograd.Variable(weight))
 
     # Train
     train.fit(train_loader,val_loader,net,exp_dir,input2label,loss_fcn,
