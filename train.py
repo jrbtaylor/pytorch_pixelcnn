@@ -4,12 +4,13 @@ Written by Jason Taylor <jasonrbtaylor@gmail.com> 2017-2018
 
 from PIL import Image
 
+import imageio
 import json
 import os
 import time
 
 import numpy as np
-import progressbar
+from progressbar import ProgressBar
 import torch
 from torch import nn
 from torch.autograd import Variable
@@ -21,6 +22,42 @@ def _clearline():
     CURSOR_UP_ONE = '\x1b[1A'
     ERASE_LINE = '\x1b[2K'
     print(CURSOR_UP_ONE+ERASE_LINE+CURSOR_UP_ONE)
+
+
+def generate_images(model,seeds,fill=1):
+    model.eval()
+    img_size = seeds.shape[2:]
+    gen = Variable(torch.from_numpy(seeds).cuda())
+    bar = ProgressBar()
+    print('Generating images...')
+    for r in bar(range(int(img_size[0]*(1-fill)),img_size[0])):
+        for c in range(img_size[1]):
+            out = model(gen)
+            p = torch.exp(out)[:,:,r,c]
+            sample = p.multinomial(1)
+            gen[:,:,r,c] = sample.float()/(out.shape[1]-1)
+    _clearline()
+    _clearline()
+    # print(np.mean(gen.data.cpu().numpy()))
+    return (255*gen.data.cpu().numpy()).astype('uint8')
+
+
+def tile_images(imgs):
+    # imgs = list(imgs)
+    n = len(imgs)
+    h = imgs[0].shape[1]
+    w = imgs[0].shape[2]
+    r = int(np.floor(np.sqrt(n)))
+    while n%r!=0:
+        r -= 1
+    c = int(n/r)
+    imgs = np.squeeze(np.array(imgs),axis=1)
+    imgs = np.transpose(imgs,(1,2,0))
+    imgs = np.reshape(imgs,[h,w,r,c])
+    imgs = np.transpose(imgs,(2,3,0,1))
+    imgs = np.concatenate(imgs,1)
+    imgs = np.concatenate(imgs,1)
+    return imgs
 
 
 def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
@@ -58,7 +95,7 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
         Image.fromarray((255*x).astype('uint8')).save(filename)
 
     def epoch(dataloader,training):
-        bar = progressbar.ProgressBar()
+        bar = ProgressBar()
         losses = []
         mean_outs = []
         for x,_ in bar(dataloader):
@@ -80,12 +117,24 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
                 loss.backward()
                 optimizer.step()
             losses.append(loss.data.cpu().numpy())
-        save_img(np.concatenate(
-            (np.squeeze(x.data.cpu().numpy()[0]), np.argmax(output[0], axis=0)/output.shape[1]), axis=1),
-                 os.path.join(exp_path, 'real_and_generated.png'))
         _clearline()
         return float(np.mean(losses)), np.mean(mean_outs)
 
+    # Get seed images for the generation to fill in: ten per class
+    seeds = {i:[] for i in range(10)}
+    for xb,yb in val_loader:
+        xb = list(xb.numpy())
+        yb = list(yb.numpy())
+        for x,y in zip(xb,yb):
+            if len(seeds[y])<10:
+                seeds[y].append(x)
+        if all([len(s)==10 for s in seeds.values()]):
+            break
+    seeds = np.array([s for v in seeds.values() for s in v]).astype('float32')
+    zero_seeds = np.random.uniform(size=seeds.shape).astype('float32')
+
+    generated = []
+    filled_in = []
     for e in range(start_epoch,max_epochs):
         # Training
         t0 = time.time()
@@ -105,12 +154,18 @@ def fit(train_loader,val_loader,model,exp_path,label_preprocess,loss_fcn,
         print(('            Validation loss = %6.4f    mean output = %1.2f    '
                '%4.2f msec/example')%(loss,mean_out,time_per_example*1000))
 
+        # Generate images and save gif
+        # filled_in.append(tile_images(generate_images(model,seeds,0.8)))
+        # imageio.mimsave(os.path.join(exp_path, 'filled_in.gif'),
+        #                 np.array(filled_in), format='gif', loop=0, fps=2)
+        generated.append(tile_images(generate_images(model,zero_seeds)))
+        imageio.mimsave(os.path.join(exp_path, 'generated.gif'),
+                        np.array(generated), format='gif', loop=0, fps=2)
+
         # Save results and update plots
         with open(statsfile,'w') as sf:
             json.dump(stats,sf)
         plot_stats(stats,exp_path)
-
-        # TODO: generate an image every epoch and output to a gif at the end
 
         # Early stopping
         torch.save(model,os.path.join(exp_path,'last_checkpoint'))
